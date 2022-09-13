@@ -1,11 +1,12 @@
+use once_cell::sync::OnceCell;
+use rocket::serde::{json::Json, Serialize};
+use rocket::{Build, Rocket};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::str::FromStr;
-use once_cell::sync::OnceCell;
-use rocket::{Rocket, Build};
-use rocket::serde::{Serialize, json::Json};
 
-#[macro_use] extern crate rocket;
+#[macro_use]
+extern crate rocket;
 
 static DATABASE: OnceCell<Mountains> = OnceCell::new();
 
@@ -52,9 +53,7 @@ impl From<Vec<Mountain>> for Mountains {
 
 impl Mountains {
     fn by_name(&mut self) {
-        self.inner.sort_by(|a, b| {
-            (a.name).cmp(&b.name) 
-        })
+        self.inner.sort_by(|a, b| (a.name).cmp(&b.name))
     }
 
     fn by_height(&mut self) {
@@ -71,21 +70,21 @@ impl Mountains {
     }
 
     fn by_first_ascent(&mut self) {
-        self.inner.sort_by(|a, b| {
-            match (a.first_ascent.as_ref(), b.first_ascent.as_ref()) {
+        self.inner.sort_by(
+            |a, b| match (a.first_ascent.as_ref(), b.first_ascent.as_ref()) {
                 (None, None) => Ordering::Equal,
                 (Some(year_a), Some(year_b)) => year_a.cmp(year_b),
                 (_, None) => Ordering::Less,
                 (None, _) => Ordering::Greater,
-            }
-        })
+            },
+        )
     }
 }
 
 fn load_mountains() -> Result<Mountains, Box<dyn Error>> {
     let data: &[u8] = include_bytes!("../../swiss-mountains.csv");
     let mut reader = csv::Reader::from_reader(data);
-    
+
     let mut mountains = Vec::new();
 
     for result in reader.records() {
@@ -113,13 +112,45 @@ fn load_mountains() -> Result<Mountains, Box<dyn Error>> {
     Ok(Mountains::from(mountains))
 }
 
+#[get("/single_tallest")]
+fn single_tallest() -> Json<Mountain> {
+    let mut mountains = match DATABASE.get() {
+        Some(mountains) => mountains.clone(),
+        None => {
+            return Json(Mountain {
+                name: String::from(""),
+                height: 0.0,
+                first_ascent: None,
+            });
+        }
+    };
+    mountains.by_height();
+
+    let tallest: Mountain = mountains.inner.first().unwrap().clone();
+    Json(tallest)
+}
+
+#[get("/tallest?<n_rows>")]
+fn tallest_mountain(n_rows: Option<usize>) -> Json<Vec<Mountain>> {
+    let mut mountains = match DATABASE.get() {
+        Some(mountains) => mountains.clone(),
+        None => {
+            return Json(vec![]);
+        }
+    };
+    mountains.by_height();
+
+    let n_rows: usize = n_rows.unwrap_or(2);
+    Json(mountains.inner.into_iter().take(n_rows).collect::<Vec<_>>())
+}
+
 #[get("/?<order>&<n_rows>")]
 fn process_request(order: Option<&str>, n_rows: Option<usize>) -> Json<Vec<Mountain>> {
     let mut mountains = match DATABASE.get() {
         Some(mountains) => mountains.clone(),
         None => {
             return Json(vec![]);
-        },
+        }
     };
 
     match order.unwrap_or(&String::from("")) {
@@ -141,12 +172,15 @@ fn api() -> Rocket<Build> {
     match load_mountains() {
         Ok(mountains) => {
             DATABASE.set(mountains).expect("unable to save to database");
-        },
+        }
         Err(err) => {
             println!("encountered an error! {}", err);
             std::process::exit(1);
-        },
+        }
     };
 
-    rocket::build().mount("/", routes![process_request])
+    rocket::build().mount(
+        "/",
+        routes![process_request, tallest_mountain, single_tallest,],
+    )
 }
